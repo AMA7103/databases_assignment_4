@@ -1,0 +1,46 @@
+
+# Environment variables and credentials
+.env
+.env.*
+!.env.example
+
+# Python virtual environments
+.venv/
+venv/
+env/
+
+# Python cache and compiled files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Pytest cache and coverage files
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+
+# Generated SQLite databases
+*.db
+*.db-journal
+*.db-shm
+*.db-wal
+*.sqlite
+*.sqlite3
+
+# Logs
+*.log
+logs/
+
+# Operating system files
+.DS_Store
+Thumbs.db
+
+# IDE and editor settings
+.vscode/
+.idea/
+
+# Python build artifacts
+build/
+dist/
+*.egg-info/
