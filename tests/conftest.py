@@ -2,71 +2,42 @@ import os
 from pathlib import Path
 
 import pytest
-from sqlalchemy import func, select
+from sqlalchemy import func, inspect, select
 from sqlalchemy.orm import Session
 
-from src.database import (
-    PROJECT_ROOT,
-    get_source_engine,
-)
+from src.database import PROJECT_ROOT, get_source_engine
 from src.source_models import Film
 
 
 @pytest.fixture
 def test_db():
-    """Prepare isolated databases before each test."""
-    source_name = os.environ["MYSQL_DATABASE"]
-    test_name = os.environ["MYSQL_TEST_DATABASE"]
+    """Use a separate Sakila copy and recreate the SQLite test file."""
+    if os.environ["MYSQL_DATABASE"] == os.environ["MYSQL_TEST_DATABASE"]:
+        raise ValueError("MySQL test and production databases must be different")
 
-    if source_name == test_name:
-        raise ValueError(
-            "The test MySQL database must differ from the source database."
-        )
+    def path(name):
+        value = Path(os.environ[name]).expanduser()
+        return value if value.is_absolute() else PROJECT_ROOT / value
 
-    sqlite_path = Path(
-        os.environ["SQLITE_TEST_DATABASE_PATH"]
-    ).expanduser()
-
-    if not sqlite_path.is_absolute():
-        sqlite_path = PROJECT_ROOT / sqlite_path
-
-    production_path = Path(
-        os.environ["SQLITE_DATABASE_PATH"]
-    ).expanduser()
-
-    if not production_path.is_absolute():
-        production_path = PROJECT_ROOT / production_path
-
-    if sqlite_path.resolve() == production_path.resolve():
-        raise ValueError(
-            "The test SQLite database must differ from the production database."
-        )
-
-    sqlite_path.parent.mkdir(parents=True, exist_ok=True)
-
-    if sqlite_path.exists():
-        sqlite_path.unlink()
+    test_path = path("SQLITE_TEST_DATABASE_PATH")
+    if test_path.resolve() == path("SQLITE_DATABASE_PATH").resolve():
+        raise ValueError("SQLite test and production databases must be different")
+    test_path.parent.mkdir(parents=True, exist_ok=True)
+    if test_path.exists():
+        test_path.unlink()
 
     engine = get_source_engine(test=True)
-
     try:
         with Session(engine) as session:
-            film_count = session.scalar(
-                select(func.count()).select_from(Film)
-            )
-
-            if film_count == 0:
-                raise ValueError(
-                    "sakila_test must contain the Sakila sample data."
-                )
+            if not session.scalar(select(func.count()).select_from(Film)):
+                raise ValueError("sakila_test needs a populated Sakila sample database")
     finally:
         engine.dispose()
-
     yield
 
 
 class SourceEditor:
-    """Track test changes so they can be undone afterward."""
+    """Track committed test inserts and changes so cleanup can reverse them."""
 
     def __init__(self, session):
         self.session = session
@@ -74,58 +45,43 @@ class SourceEditor:
         self.updated = {}
 
     def add(self, model, **values):
-        """Add a source record and remember it for cleanup."""
         obj = model(**values)
         self.session.add(obj)
         self.inserted.append(obj)
         return obj
 
     def update(self, obj, **values):
-        """Update a record while preserving its original values."""
-        if obj not in self.updated:
-            self.updated[obj] = {}
-
+        original = self.updated.setdefault(obj, {})
         for name, value in values.items():
-            if name not in self.updated[obj]:
-                self.updated[obj][name] = getattr(obj, name)
-
+            original.setdefault(name, getattr(obj, name))
             setattr(obj, name, value)
-
         return obj
 
     def commit(self):
-        """Commit changes so the sync process can read them."""
         self.session.commit()
 
     def restore(self):
-        """Undo updates and remove inserted test records."""
         self.session.rollback()
-
-        for obj, original_values in self.updated.items():
-            for name, value in original_values.items():
+        for obj, old_values in self.updated.items():
+            for name, value in old_values.items():
                 setattr(obj, name, value)
-
         self.session.flush()
-
-        # Delete children before parents by reversing insertion order.
         for obj in reversed(self.inserted):
-            self.session.delete(obj)
-
+            if inspect(obj).persistent:
+                self.session.delete(obj)
         self.session.commit()
 
 
 @pytest.fixture
 def source_editor(test_db):
-    """Provide a source session with automatic test-data cleanup."""
+    """Restore ORM-tracked MySQL changes after each incremental test."""
     engine = get_source_engine(test=True)
-
-    with Session(engine, expire_on_commit=False) as session:
-        editor = SourceEditor(session)
-
-        try:
-            yield editor
-        finally:
+    try:
+        with Session(engine, expire_on_commit=False) as session:
+            editor = SourceEditor(session)
             try:
-                editor.restore()
+                yield editor
             finally:
-                engine.dispose()
+                editor.restore()
+    finally:
+        engine.dispose()

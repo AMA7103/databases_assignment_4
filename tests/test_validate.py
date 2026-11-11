@@ -1,57 +1,44 @@
-import pytest
+from decimal import Decimal
 
-from sqlalchemy import select, func
+import pytest
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from src.analytics_models import FactPayment
-from src.database import get_source_engine, get_target_engine
-from src.source_models import Payment
-from src.sync import init, full_load
+from src.database import get_target_engine
+from src.sync import full_load, init
 from src.validation import validate
 
 
 def test_validate(test_db):
-    """Verify validation passes and detects inconsistent data."""
+    """Check that correct data passes and corrupt totals/counts fail."""
     init(test=True)
     full_load(test=True)
+    assert validate(test=True)["status"] == "passed"
 
-    # A correctly synchronized database should pass validation.
-    result = validate(test=True)
-    assert result["status"] == "passed"
-
-    source_engine = get_source_engine(test=True)
-    target_engine = get_target_engine(test=True)
-
+    engine = get_target_engine(test=True)
     try:
-        with Session(source_engine) as source:
-            # Select a payment in the default validation period.
-            latest_payment = source.scalar(
-                select(func.max(Payment.payment_date))
-            )
-
-            payment_id = source.scalar(
-                select(Payment.payment_id)
-                .where(Payment.payment_date == latest_payment)
-                .limit(1)
-            )
-
-        # Deliberately remove that payment from the SQLite test database.
-        with Session(target_engine) as target:
-            payment = target.scalar(
-                select(FactPayment).where(
-                    FactPayment.payment_id == payment_id
-                )
-            )
-
+        with Session(engine) as session:
+            payment = session.scalar(select(FactPayment).order_by(FactPayment.payment_id))
             assert payment is not None
+            original_amount = payment.amount
+            payment.amount = original_amount + Decimal("2.00")
+            session.commit()
+            payment_id = payment.payment_id
 
-            target.delete(payment)
-            target.commit()
-
-        # Validation must detect the missing payment.
-        with pytest.raises(ValueError, match="fact_payment"):
+        with pytest.raises(ValueError, match="payment totals differ"):
             validate(test=True)
 
+        with Session(engine) as session:
+            payment = session.scalar(
+                select(FactPayment).where(FactPayment.payment_id == payment_id)
+            )
+            payment.amount = original_amount
+            session.commit()
+            session.delete(payment)
+            session.commit()
+
+        with pytest.raises(ValueError, match="fact_payment: source count"):
+            validate(test=True)
     finally:
-        source_engine.dispose()
-        target_engine.dispose()
+        engine.dispose()

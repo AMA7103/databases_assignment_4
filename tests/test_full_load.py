@@ -1,99 +1,55 @@
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from src.analytics_models import (
+    BridgeFilmActor, BridgeFilmCategory, DimActor, DimCategory, DimCustomer,
+    DimFilm, DimStore, FactPayment, FactRental, SyncState,
+)
 from src.database import get_source_engine, get_target_engine
 from src.source_models import (
-    Film, Actor, Category, Store, Customer,
-    FilmActor, FilmCategory, Rental, Payment,
+    Actor, Category, Customer, Film, FilmActor, FilmCategory,
+    Payment, Rental, Store,
 )
-from src.analytics_models import (
-    DimFilm, DimActor, DimCategory, DimStore, DimCustomer,
-    BridgeFilmActor, BridgeFilmCategory,
-    FactRental, FactPayment, SyncState,
-)
-from src.sync import init, full_load
+from src.sync import full_load, init
+from src.validation import validate
 
 
 def test_full_load(test_db):
-    """Verify full load copies all data and is safe to rerun."""
+    """Check complete loads, synchronization markers, and rerun safety."""
     init(test=True)
-    full_load(test=True)
+    full_load(test=True)  # Includes automatic validation before commit.
 
     source_engine = get_source_engine(test=True)
     target_engine = get_target_engine(test=True)
-
     try:
+        tables = [
+            (Film, DimFilm), (Actor, DimActor), (Category, DimCategory),
+            (Store, DimStore), (Customer, DimCustomer),
+            (FilmActor, BridgeFilmActor), (FilmCategory, BridgeFilmCategory),
+            (Rental, FactRental), (Payment, FactPayment),
+        ]
         with Session(source_engine) as source, Session(target_engine) as target:
-            tables = [
-                (Film, DimFilm),
-                (Actor, DimActor),
-                (Category, DimCategory),
-                (Store, DimStore),
-                (Customer, DimCustomer),
-                (FilmActor, BridgeFilmActor),
-                (FilmCategory, BridgeFilmCategory),
-                (Rental, FactRental),
-                (Payment, FactPayment),
-            ]
+            original_counts = {}
+            for original, copied in tables:
+                source_count = source.scalar(select(func.count()).select_from(original))
+                target_count = target.scalar(select(func.count()).select_from(copied))
+                assert source_count == target_count, copied.__tablename__
+                original_counts[copied.__tablename__] = target_count
+            assert target.scalar(select(func.count()).select_from(SyncState)) == 15
+            original_keys = dict(target.execute(select(DimFilm.film_id, DimFilm.film_key)))
 
-            # All source and target table counts must match.
-            for source_model, target_model in tables:
-                source_count = source.scalar(
-                    select(func.count()).select_from(source_model)
-                )
-                target_count = target.scalar(
-                    select(func.count()).select_from(target_model)
-                )
-
-                assert source_count == target_count, (
-                    f"Row count mismatch for {target_model.__tablename__}"
-                )
-
-            # A synchronization marker must exist for each source table.
-            marker_count = target.scalar(
-                select(func.count()).select_from(SyncState)
-            )
-            assert marker_count == 15
-
-            # Record counts and surrogate keys before rerunning.
-            original_counts = {
-                model.__tablename__: target.scalar(
-                    select(func.count()).select_from(model)
-                )
-                for _, model in tables
-            }
-
-            original_film_keys = dict(
-                target.execute(
-                    select(DimFilm.film_id, DimFilm.film_key)
-                )
-            )
-
-        # Running the full load again must not create duplicates.
+        assert validate(test=True)["status"] == "passed"
         full_load(test=True)
 
         with Session(target_engine) as target:
-            for _, model in tables:
-                new_count = target.scalar(
-                    select(func.count()).select_from(model)
-                )
-
-                assert new_count == original_counts[model.__tablename__]
-
-            new_film_keys = dict(
-                target.execute(
-                    select(DimFilm.film_id, DimFilm.film_key)
-                )
-            )
-
-            # Existing dimension records retain their surrogate keys.
-            assert new_film_keys == original_film_keys
-
-            marker_count = target.scalar(
-                select(func.count()).select_from(SyncState)
-            )
-            assert marker_count == 15
-
+            for _, copied in tables:
+                assert target.scalar(
+                    select(func.count()).select_from(copied)
+                ) == original_counts[copied.__tablename__]
+            assert dict(target.execute(
+                select(DimFilm.film_id, DimFilm.film_key)
+            )) == original_keys
+            assert target.scalar(select(func.count()).select_from(SyncState)) == 15
     finally:
         source_engine.dispose()
         target_engine.dispose()
