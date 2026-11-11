@@ -6,8 +6,61 @@ from sqlalchemy import func, inspect, select
 from sqlalchemy.orm import Session
 
 from src.database import PROJECT_ROOT, get_source_engine
-from src.source_models import Film
+from src.source_models import Actor, Address, Customer, Film, FilmActor, Rental
 
+def reset_test_source():
+    """Undo changes made by the current tests using clean Sakila values."""
+    clean_engine = get_source_engine()
+    test_engine = get_source_engine(test=True)
+
+    try:
+        with Session(clean_engine) as clean, Session(test_engine) as test:
+            with test.begin():
+                # Remove actors inserted by test_incremental_insert.
+                original_actor_ids = set(clean.scalars(select(Actor.actor_id)))
+                test_actors = test.scalars(
+                    select(Actor).where(
+                        Actor.first_name == "TEST",
+                        Actor.last_name == "INCREMENTAL",
+                    )
+                ).all()
+
+                for actor in test_actors:
+                    if actor.actor_id in original_actor_ids:
+                        continue
+                    links = test.scalars(
+                        select(FilmActor).where(
+                            FilmActor.actor_id == actor.actor_id
+                        )
+                    ).all()
+                    for link in links:
+                        test.delete(link)
+                    test.flush()
+                    test.delete(actor)
+
+                test.flush()
+
+                # Restore fields changed by test_incremental_update.
+                for model, key, fields in (
+                    (Customer, "customer_id", ("first_name", "last_update")),
+                    (Address, "address_id", ("city_id", "last_update")),
+                    (Rental, "rental_id", ("return_date", "last_update")),
+                ):
+                    originals = {
+                        getattr(row, key): row
+                        for row in clean.scalars(select(model))
+                    }
+                    for row in test.scalars(select(model)):
+                        original = originals.get(getattr(row, key))
+                        if original is None:
+                            continue
+                        for field in fields:
+                            value = getattr(original, field)
+                            if getattr(row, field) != value:
+                                setattr(row, field, value)
+    finally:
+        clean_engine.dispose()
+        test_engine.dispose()
 
 @pytest.fixture
 def test_db():
@@ -26,6 +79,8 @@ def test_db():
     if test_path.exists():
         test_path.unlink()
 
+    reset_test_source()
+    
     engine = get_source_engine(test=True)
     try:
         with Session(engine) as session:
