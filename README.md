@@ -96,7 +96,7 @@ Run all commands from the project root directory.
 ### init
 
 ```bash
-python main.py init
+python -m src.main init
 ```
 
 Verifies the MySQL connection and creates the SQLite analytics tables.
@@ -104,7 +104,7 @@ Verifies the MySQL connection and creates the SQLite analytics tables.
 ### full-load
 
 ```bash
-python main.py full-load
+python -m src.main full-load
 ```
 
 Loads all required source records into SQLite. Dimensions are processed before bridges and facts. The operation is transactional and can be rerun without creating duplicates.
@@ -112,7 +112,7 @@ Loads all required source records into SQLite. Dimensions are processed before b
 ### incremental
 
 ```bash
-python main.py incremental
+python -m src.main incremental
 ```
 
 Synchronizes new and updated source records using each table's `last_update` timestamp and stored markers in `sync_state`.
@@ -122,7 +122,7 @@ The process uses `>=` for change detection and upserts to prevent duplicates. Ch
 ### validate
 
 ```bash
-python main.py validate
+python -m src.main validate
 ```
 
 Validates consistency between MySQL and SQLite using the 30-day period ending on the latest Sakila payment date.
@@ -130,7 +130,7 @@ Validates consistency between MySQL and SQLite using the 30-day period ending on
 A custom date range can also be supplied:
 
 ```bash
-python main.py validate --from 2005-07-01 --to 2005-07-31
+python -m src.main validate --from 2005-07-01 --to 2005-07-31
 ```
 
 Validation checks row counts, missing records, duplicate natural keys, foreign-key references, and payment totals by store. Payment differences greater than $0.01 are treated as errors.
