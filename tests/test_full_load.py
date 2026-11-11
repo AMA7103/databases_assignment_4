@@ -36,7 +36,7 @@ def test_full_load(test_db):
                 assert source_count == target_count, copied.__tablename__
                 original_counts[copied.__tablename__] = target_count
             assert target.scalar(select(func.count()).select_from(SyncState)) == 15
-            original_keys = dict(target.execute(select(DimFilm.film_id, DimFilm.film_key)))
+            original_keys = dict(target.execute(select(DimFilm.film_id, DimFilm.film_key)).all())
 
         assert validate(test=True)["status"] == "passed"
         full_load(test=True)
@@ -48,7 +48,7 @@ def test_full_load(test_db):
                 ) == original_counts[copied.__tablename__]
             assert dict(target.execute(
                 select(DimFilm.film_id, DimFilm.film_key)
-            )) == original_keys
+            ).all()) == original_keys
             assert target.scalar(select(func.count()).select_from(SyncState)) == 15
     finally:
         source_engine.dispose()

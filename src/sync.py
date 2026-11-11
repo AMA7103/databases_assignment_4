@@ -70,7 +70,7 @@ def _keys(target, model, natural, surrogate, ids):
     return dict(target.execute(
         select(getattr(model, natural), getattr(model, surrogate))
         .where(getattr(model, natural).in_(ids))
-    ))
+    ).all())
 
 
 def _date_key(timestamp):
