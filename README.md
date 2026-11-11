@@ -252,6 +252,8 @@ The SQLite connection executes `PRAGMA foreign_keys=ON` to enable foreign-key co
 
 ## 8. Citations
 
+This section also exists in the Word document as per requirements.
+
 ### SQLAlchemy Documentation
 
 **Source:** [SQLAlchemy 2.1 Documentation](https://docs.sqlalchemy.org/en/21/)
